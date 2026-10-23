@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf8 -*-
+import codecs
 import json
+import math
+import shutil
 from pathlib import Path
 
 from libs.constants import DEFAULT_ENCODING
@@ -22,13 +25,39 @@ class CreateMLWriter:
         self.shapes = shapes
         self.output_file = output_file
 
+    def read_existing_annotations(self):
+        """Load the annotations that are already stored in the output file."""
+        if not os.path.isfile(self.output_file):
+            return []
+
+        with codecs.open(self.output_file, 'r', encoding=ENCODE_METHOD) as output_file:
+            input_data = output_file.read()
+
+        try:
+            output_dict = json.loads(input_data)
+        except ValueError:
+            print('Failed to parse {0}, it is replaced and backed up.'.format(self.output_file))
+            self.backup_output_file()
+            return []
+
+        # Files written by other tools do not necessarily hold a list.
+        if not isinstance(output_dict, list):
+            print('Unexpected content in {0}, it is replaced and backed up.'.format(self.output_file))
+            self.backup_output_file()
+            return []
+
+        return [entry for entry in output_dict if isinstance(entry, dict)]
+
+    def backup_output_file(self):
+        backup_file = self.output_file + '.bak'
+        try:
+            shutil.copyfile(self.output_file, backup_file)
+            print('Previous annotations moved to {0}.'.format(backup_file))
+        except (IOError, OSError) as e:
+            print('Failed to back up {0}: {1}'.format(self.output_file, e))
+
     def write(self):
-        if os.path.isfile(self.output_file):
-            with open(self.output_file, "r") as file:
-                input_data = file.read()
-                output_dict = json.loads(input_data)
-        else:
-            output_dict = []
+        output_dict = self.read_existing_annotations()
 
         output_image_dict = {
             "image": self.filename,
@@ -37,13 +66,14 @@ class CreateMLWriter:
 
         for shape in self.shapes:
             points = shape["points"]
+            if not points:
+                continue
 
-            x1 = points[0][0]
-            y1 = points[0][1]
-            x2 = points[1][0]
-            y2 = points[2][1]
+            x_values = [point[0] for point in points]
+            y_values = [point[1] for point in points]
 
-            height, width, x, y = self.calculate_coordinates(x1, x2, y1, y2)
+            height, width, x, y = self.calculate_coordinates(min(x_values), max(x_values),
+                                                             min(y_values), max(y_values))
 
             shape_dict = {
                 "label": shape["label"],
@@ -59,7 +89,7 @@ class CreateMLWriter:
         # check if image already in output
         exists = False
         for i in range(0, len(output_dict)):
-            if output_dict[i]["image"] == output_image_dict["image"]:
+            if output_dict[i].get("image") == output_image_dict["image"]:
                 exists = True
                 output_dict[i] = output_image_dict
                 break
@@ -102,9 +132,11 @@ class CreateMLReader:
             self.parse_json()
         except ValueError:
             print("JSON decoding failed")
+        except (KeyError, TypeError) as e:
+            print('Unexpected CreateML format in {0}: {1}'.format(self.json_path, e))
 
     def parse_json(self):
-        with open(self.json_path, "r") as file:
+        with codecs.open(self.json_path, 'r', encoding=ENCODE_METHOD) as file:
             input_data = file.read()
 
         output_dict = json.loads(input_data)
@@ -113,16 +145,32 @@ class CreateMLReader:
         if len(self.shapes) > 0:
             self.shapes = []
         for image in output_dict:
-            if image["image"] == self.filename:
-                for shape in image["annotations"]:
-                    self.add_shape(shape["label"], shape["coordinates"])
+            if not isinstance(image, dict) or image.get("image") != self.filename:
+                continue
+            for shape in image.get("annotations") or []:
+                if not isinstance(shape, dict):
+                    continue
+                self.add_shape(shape["label"], shape["coordinates"])
 
     def add_shape(self, label, bnd_box):
-        x_min = bnd_box["x"] - (bnd_box["width"] / 2)
-        y_min = bnd_box["y"] - (bnd_box["height"] / 2)
+        try:
+            x = float(bnd_box["x"])
+            y = float(bnd_box["y"])
+            width = float(bnd_box["width"])
+            height = float(bnd_box["height"])
+        except (KeyError, TypeError, ValueError) as e:
+            print('Skipping a CreateML annotation of {0}: {1}'.format(self.json_path, e))
+            return
 
-        x_max = bnd_box["x"] + (bnd_box["width"] / 2)
-        y_max = bnd_box["y"] + (bnd_box["height"] / 2)
+        if not all(math.isfinite(value) for value in (x, y, width, height)):
+            print('Skipping non-finite CreateML coordinates in {0}.'.format(self.json_path))
+            return
+
+        x_min = x - (width / 2)
+        y_min = y - (height / 2)
+
+        x_max = x + (width / 2)
+        y_max = y + (height / 2)
 
         points = [(x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)]
         self.shapes.append((label, points, None, None, True))

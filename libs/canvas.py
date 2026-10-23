@@ -696,6 +696,9 @@ class Canvas(QWidget):
     def load_pixmap(self, pixmap):
         self.pixmap = pixmap
         self.shapes = []
+        self.selected_shape = None
+        self.selected_shape_copy = None
+        self.current = None
         self.repaint()
 
     def load_shapes(self, shapes):
@@ -726,6 +729,10 @@ class Canvas(QWidget):
     def reset_state(self):
         self.restore_cursor()
         self.pixmap = None
+        self.shapes = []
+        self.selected_shape = None
+        self.selected_shape_copy = None
+        self.current = None
         self.update()
 
     def set_drawing_shape_to_square(self, status):

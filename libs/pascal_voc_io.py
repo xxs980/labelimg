@@ -111,6 +111,9 @@ class PascalVocWriter:
 
     def save(self, target_file=None):
         root = self.gen_xml()
+        if root is None:
+            raise ValueError('Cannot save an incomplete annotation: {0}'.format(target_file or self.filename))
+
         self.append_objects(root)
         out_file = None
         if target_file is None:

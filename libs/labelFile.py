@@ -73,6 +73,8 @@ class LabelFile(object):
 
         for shape in shapes:
             points = shape['points']
+            if not points:
+                continue
             label = shape['label']
             # Add Chris
             difficult = int(shape['difficult'])
@@ -97,12 +99,18 @@ class LabelFile(object):
             image.load(image_path)
         image_shape = [image.height(), image.width(),
                        1 if image.isGrayscale() else 3]
+        if image_shape[0] <= 0 or image_shape[1] <= 0:
+            raise LabelFileError(
+                'Cannot save yolo annotations for {0}: the size of the image is unknown.'.format(img_file_name))
+
         writer = YOLOWriter(img_folder_name, img_file_name,
                             image_shape, local_img_path=image_path)
         writer.verified = self.verified
 
         for shape in shapes:
             points = shape['points']
+            if not points:
+                continue
             label = shape['label']
             # Add Chris
             difficult = int(shape['difficult'])
@@ -151,6 +159,9 @@ class LabelFile(object):
 
     @staticmethod
     def convert_points_to_bnd_box(points):
+        if not points:
+            raise ValueError('Cannot turn a shape without points into a bounding box.')
+
         x_min = float('inf')
         y_min = float('inf')
         x_max = float('-inf')

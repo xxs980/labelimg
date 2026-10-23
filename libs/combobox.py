@@ -30,7 +30,9 @@ class ComboBox(QWidget):
         self.items = items
 
         current_text = "[SHOW ALL]" if self.cb.currentText() == "" else self.cb.currentText()
-        new_index = items.index(current_text)
+        # The selected filter can disappear when its label is renamed or
+        # removed. Fall back to the first entry instead of raising ValueError.
+        new_index = items.index(current_text) if current_text in items else 0
         self.cb.clear()
         self.cb.addItems(self.items)
         self.cb.setCurrentIndex(new_index)

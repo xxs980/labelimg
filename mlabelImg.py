@@ -47,6 +47,7 @@ from libs.pascal_voc_io import PascalVocReader
 from libs.pascal_voc_io import XML_EXT
 from libs.yolo_io import YoloReader
 from libs.yolo_io import TXT_EXT
+from libs.yolo_io import read_class_list
 from libs.create_ml_io import CreateMLReader
 from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
@@ -615,6 +616,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.shapes_to_items.clear()
         self.label_list.clear()
         self.file_path = None
+        self.image = QImage()
         self.image_data = None
         self.label_file = None
         self.canvas.reset_state()
@@ -734,7 +736,14 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Tzutalin 20160906 : Add file list and dock to move faster
     def file_item_double_clicked(self, item=None):
-        self.cur_img_idx = self.m_img_list.index(ustr(item.text()))
+        if item is None:
+            return
+
+        file_path = ustr(item.text())
+        if file_path not in self.m_img_list:
+            return
+
+        self.cur_img_idx = self.m_img_list.index(file_path)
         filename = self.m_img_list[self.cur_img_idx]
         if filename:
             self.load_file(filename)
@@ -783,6 +792,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.shapeFillColor.setEnabled(selected)
 
     def add_label(self, shape):
+        if shape is None:
+            return
         shape.paint_label = self.display_label_option.isChecked()
         item = HashableQListWidgetItem(shape.label)
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -883,12 +894,16 @@ class MainWindow(QMainWindow, WindowMixin):
                                      self.line_color.getRgb(), self.fill_color.getRgb())
             print('Image:{0} -> Annotation:{1}'.format(self.file_path, annotation_file_path))
             return True
-        except LabelFileError as e:
+        except (LabelFileError, OSError) as e:
             self.error_message(u'Error saving label data', u'<b>%s</b>' % e)
             return False
 
     def copy_selected_shape(self):
-        self.add_label(self.canvas.copy_selected_shape())
+        shape = self.canvas.copy_selected_shape()
+        if shape is None:
+            # Nothing is selected, there is nothing to duplicate.
+            return
+        self.add_label(shape)
         # fix copy and delete
         self.shape_selection_changed(True)
 
@@ -1055,37 +1070,30 @@ class MainWindow(QMainWindow, WindowMixin):
             file_path = self.settings.get(SETTING_FILENAME)
 
         # Make sure that filePath is a regular python string, rather than QString
-        file_path = ustr(file_path)
-
-        # Fix bug: An  index error after select a directory when open a new file.
         unicode_file_path = ustr(file_path)
+        if not unicode_file_path:
+            return False
         unicode_file_path = os.path.abspath(unicode_file_path)
         # Tzutalin 20160906 : Add file list and dock to move faster
-        # Highlight the file item
-        if unicode_file_path and self.file_list_widget.count() > 0:
-            if unicode_file_path in self.m_img_list:
-                index = self.m_img_list.index(unicode_file_path)
-                file_widget_item = self.file_list_widget.item(index)
+        # Highlight the file item. Files that are not part of the scanned
+        # directory stay in the list, emptying it here would leave the image
+        # counter behind and break navigation with an index error.
+        if unicode_file_path in self.m_img_list:
+            file_widget_item = self.file_list_widget.item(self.m_img_list.index(unicode_file_path))
+            if file_widget_item is not None:
                 file_widget_item.setSelected(True)
-            else:
-                self.file_list_widget.clear()
-                self.m_img_list.clear()
 
-        if unicode_file_path and os.path.exists(unicode_file_path):
+        if os.path.exists(unicode_file_path):
             if LabelFile.is_label_file(unicode_file_path):
-                try:
-                    self.label_file = LabelFile(unicode_file_path)
-                except LabelFileError as e:
-                    self.error_message(u'Error opening file',
-                                       (u"<p><b>%s</b></p>"
-                                        u"<p>Make sure <i>%s</i> is a valid label file.")
-                                       % (e, unicode_file_path))
-                    self.status("Error reading %s" % unicode_file_path)
-                    return False
-                self.image_data = self.label_file.image_data
-                self.line_color = QColor(*self.label_file.lineColor)
-                self.fill_color = QColor(*self.label_file.fillColor)
-                self.canvas.verified = self.label_file.verified
+                # An annotation file does not carry an image, the image of it
+                # has to be opened instead. The annotation itself is picked up
+                # for every image by show_bounding_box_from_annotation_file().
+                self.error_message(
+                    u'Error opening file',
+                    u"<p>Make sure <i>%s</i> is an image file.</p>"
+                    u"<p>Annotations are loaded together with their image.</p>" % unicode_file_path)
+                self.status("Error reading %s" % unicode_file_path)
+                return False
             else:
                 # Load image:
                 # read data first and store for saving into label file.
@@ -1128,6 +1136,12 @@ class MainWindow(QMainWindow, WindowMixin):
             return True
         return False
 
+    def image_at_index(self, index):
+        """Return the image at the given position, None when it is out of range."""
+        if 0 <= index < len(self.m_img_list):
+            return self.m_img_list[index]
+        return None
+
     def counter_str(self):
         """
         Converts image counter to string representation.
@@ -1166,13 +1180,16 @@ class MainWindow(QMainWindow, WindowMixin):
         super(MainWindow, self).resizeEvent(event)
 
     def paint_canvas(self):
-        assert not self.image.isNull(), "cannot paint null image"
+        if self.image.isNull():
+            return
         self.canvas.scale = 0.01 * self.zoom_widget.value()
         self.canvas.label_font_size = int(0.02 * max(self.image.width(), self.image.height()))
         self.canvas.adjustSize()
         self.canvas.update()
 
     def adjust_scale(self, initial=False):
+        if not self.canvas.pixmap:
+            return
         value = self.scalers[self.FIT_WINDOW if initial else self.zoom_mode]()
         self.zoom_widget.setValue(int(100 * value))
 
@@ -1281,11 +1298,19 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.may_continue():
             return
 
-        default_open_dir_path = dir_path if dir_path else '.'
-        if self.last_open_dir and os.path.exists(self.last_open_dir):
+        if dir_path:
+            # An explicit directory takes precedence. Otherwise the folder given
+            # on the command line is replaced by the parent of the current file
+            # and a completely unrelated tree gets scanned.
+            default_open_dir_path = dir_path
+        elif self.last_open_dir and os.path.exists(self.last_open_dir):
             default_open_dir_path = self.last_open_dir
+        elif self.file_path:
+            default_open_dir_path = self.file_path if os.path.isdir(self.file_path) \
+                else os.path.dirname(self.file_path)
         else:
-            default_open_dir_path = os.path.dirname(self.file_path) if self.file_path else '.'
+            default_open_dir_path = '.'
+
         if silent != True:
             target_dir_path = ustr(QFileDialog.getExistingDirectory(self,
                                                                     '%s - Open Directory' % __appname__, default_open_dir_path,
@@ -1320,18 +1345,22 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_list_widget.clear()
         self.m_img_list = self.scan_all_images(dir_path)
         self.img_count = len(self.m_img_list)
-        # self.open_next_image()
         for imgPath in self.m_img_list:
             item = QListWidgetItem(imgPath)
             self.file_list_widget.addItem(item)
 
-        self.cur_img_idx = tmp_idx
-        
-        # if delete the last image
-        if tmp_idx == len(self.m_img_list):
-            tmp_idx = 0
+        if self.img_count <= 0:
+            # The deleted image was the last one, there is nothing left to show.
             self.cur_img_idx = 0
+            self.close_file()
+            return
 
+        # Keep the selection on the position of the deleted image. The list
+        # shrank by one, so this is the next image; the last image has no
+        # successor, in that case stay on the new last image.
+        if tmp_idx > self.img_count - 1:
+            tmp_idx = self.img_count - 1
+        self.cur_img_idx = tmp_idx
         filename = self.m_img_list[tmp_idx]
         if filename:
             self.load_file(filename)
@@ -1373,11 +1402,12 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.file_path is None:
             return
 
-        if self.cur_img_idx - 1 >= 0:
-            self.cur_img_idx -= 1
-            filename = self.m_img_list[self.cur_img_idx]
-            if filename:
-                self.load_file(filename)
+        filename = self.image_at_index(self.cur_img_idx - 1)
+        if not filename:
+            return
+
+        self.cur_img_idx -= 1
+        self.load_file(filename)
 
     def open_next_image(self, _value=False):
         # Proceeding prev image without dialog if having any label
@@ -1395,14 +1425,13 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.img_count <= 0:
             return
 
-        filename = None
         if self.file_path is None:
-            filename = self.m_img_list[0]
+            filename = self.image_at_index(0)
             self.cur_img_idx = 0
         else:
-            if self.cur_img_idx + 1 < self.img_count:
+            filename = self.image_at_index(self.cur_img_idx + 1)
+            if filename is not None:
                 self.cur_img_idx += 1
-                filename = self.m_img_list[self.cur_img_idx]
 
         if filename:
             self.load_file(filename)
@@ -1417,11 +1446,24 @@ class MainWindow(QMainWindow, WindowMixin):
         if filename:
             if isinstance(filename, (tuple, list)):
                 filename = filename[0]
-            self.cur_img_idx = 0
-            self.img_count = 1
-            self.load_file(filename)
+
+            file_path = ustr(os.path.abspath(filename))
+            if file_path in self.m_img_list:
+                # The image is part of the loaded directory, keep navigating it.
+                self.cur_img_idx = self.m_img_list.index(file_path)
+            else:
+                # From now on only the chosen image is available.
+                self.m_img_list = [file_path]
+                self.file_list_widget.clear()
+                self.file_list_widget.addItem(QListWidgetItem(file_path))
+                self.cur_img_idx = 0
+            self.img_count = len(self.m_img_list)
+            self.load_file(file_path)
 
     def save_file(self, _value=False):
+        if not self.file_path:
+            return
+
         if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
             if self.file_path:
                 image_file_name = os.path.basename(self.file_path)
@@ -1437,7 +1479,8 @@ class MainWindow(QMainWindow, WindowMixin):
                             else self.save_file_dialog(remove_ext=False))
 
     def save_file_as(self, _value=False):
-        assert not self.image.isNull(), "cannot save empty image"
+        if not self.file_path or self.image.isNull():
+            return
         self._save_file(self.save_file_dialog())
 
     def save_file_dialog(self, remove_ext=True):
@@ -1447,7 +1490,7 @@ class MainWindow(QMainWindow, WindowMixin):
         dlg = QFileDialog(self, caption, open_dialog_path, filters)
         dlg.setDefaultSuffix(LabelFile.suffix[1:])
         dlg.setAcceptMode(QFileDialog.AcceptSave)
-        filename_without_extension = os.path.splitext(self.file_path)[0]
+        filename_without_extension = os.path.splitext(self.file_path)[0] if self.file_path else ''
         dlg.selectFile(filename_without_extension)
         dlg.setOption(QFileDialog.DontUseNativeDialog, False)
         if dlg.exec_():
@@ -1473,22 +1516,62 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.setEnabled(False)
         self.actions.saveAs.setEnabled(False)
 
-    def delete_image(self):
-        tmp_idx = self.cur_img_idx
+    def annotation_file_paths(self, file_path):
+        """Return the existing annotation files that belong to the given image."""
+        basename = os.path.basename(os.path.splitext(file_path)[0])
+        search_dirs = [os.path.dirname(file_path)]
+        if self.default_save_dir:
+            save_dir = ustr(self.default_save_dir)
+            if os.path.abspath(save_dir) != os.path.abspath(search_dirs[0]):
+                search_dirs.append(save_dir)
+
+        annotation_paths = []
+        for search_dir in search_dirs:
+            for extension in (XML_EXT, TXT_EXT, JSON_EXT):
+                annotation_path = os.path.join(search_dir, basename + extension)
+                if os.path.isfile(annotation_path) and annotation_path not in annotation_paths:
+                    annotation_paths.append(annotation_path)
+        return annotation_paths
+
+    @staticmethod
+    def remove_file(file_path):
+        try:
+            os.remove(file_path)
+            return True
+        except OSError as e:
+            print('Failed to remove {}: {}'.format(file_path, e))
+            return False
+
+    def delete_image(self, _value=False):
         delete_path = self.file_path
-        if delete_path is not None:
-            self.open_next_image()
-            self.cur_img_idx -= 1
-            self.img_count -= 1
-            if os.path.exists(delete_path):
-                basename = os.path.basename(os.path.splitext(delete_path)[0])
-                txt_path = os.path.join(self.default_save_dir, basename + TXT_EXT)
-                os.remove(delete_path)
-                os.remove(txt_path)
+        if not delete_path or not os.path.isfile(delete_path):
+            return
 
-            self.import_dir_images_after_delete(self.last_open_dir, tmp_idx)
+        msg = u'Are you sure you want to delete "{}" and its annotations?'.format(ustr(os.path.basename(delete_path)))
+        reply = QMessageBox.question(self, u'Delete Image', msg,
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
 
-        
+        try:
+            deleted_idx = self.m_img_list.index(delete_path)
+        except ValueError:
+            deleted_idx = self.cur_img_idx
+
+        file_paths = self.annotation_file_paths(delete_path) + [delete_path]
+        failed_paths = [p for p in file_paths if not self.remove_file(p)]
+
+        # The image is gone, unsaved edits of it must not be written back.
+        self.dirty = False
+        self.reset_state()
+        self.set_clean()
+
+        if failed_paths:
+            self.error_message(u'Error deleting files',
+                               u'<p>Make sure the files are not used by another program.</p>'
+                               u'<p>%s</p>' % '<br/>'.join(ustr(p) for p in failed_paths))
+
+        self.import_dir_images_after_delete(self.last_open_dir or os.path.dirname(delete_path), deleted_idx)
 
     def reset_all(self):
         self.settings.reset()
@@ -1564,14 +1647,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_dirty()
 
     def load_predefined_classes(self, predef_classes_file):
-        if os.path.exists(predef_classes_file) is True:
-            with codecs.open(predef_classes_file, 'r', 'utf8') as f:
-                for line in f:
-                    line = line.strip()
-                    if self.label_hist is None:
-                        self.label_hist = [line]
-                    else:
-                        self.label_hist.append(line)
+        if not predef_classes_file or not os.path.isfile(predef_classes_file):
+            return
+
+        for label in read_class_list(predef_classes_file):
+            self.label_hist.append(label)
 
     def load_pascal_xml_by_filename(self, xml_path):
         if self.file_path is None:
@@ -1613,6 +1693,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.verified = create_ml_parse_reader.verified
 
     def copy_previous_bounding_boxes(self):
+        if not self.file_path or self.file_path not in self.m_img_list:
+            self.status('No previous image to copy bounding boxes from.')
+            return
+
         current_index = self.m_img_list.index(self.file_path)
         if current_index - 1 >= 0:
             prev_file_path = self.m_img_list[current_index - 1]
@@ -1644,7 +1728,9 @@ def get_main_app(argv=[]):
     Standard boilerplate Qt application code.
     Do everything but app.exec_() -- so that we can test the application in one thread
     """
-    app = QApplication(argv)
+    # Qt only allows one application object per process, creating a second one
+    # aborts the process.
+    app = QApplication.instance() or QApplication(argv)
     app.setApplicationName(__appname__)
     app.setWindowIcon(new_icon("app"))
     # Tzutalin 201705+: Accept extra agruments to change predefined class file
