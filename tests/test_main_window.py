@@ -1,4 +1,4 @@
-﻿import os
+import os
 import shutil
 import tempfile
 import unittest
@@ -332,6 +332,102 @@ class MainWindowTestCase(unittest.TestCase):
         window.update_combo_box()
 
         self.assertGreaterEqual(window.combo_box.cb.findText('dog'), 0)
+
+    def voc_xml(self, names):
+        objects = ['<object><name>{0}</name><bndbox>'
+                   '<xmin>2</xmin><ymin>2</ymin><xmax>8</xmax><ymax>8</ymax>'
+                   '</bndbox></object>'.format(name) for name in names]
+        return '<annotation>{0}</annotation>'.format(''.join(objects))
+
+    def given_window_with_one_image(self, save_dir=None):
+        self.make_images(1)
+        window = mlabelImg.MainWindow(self.dir_path, CLASS_FILE, save_dir)
+        self.app.processEvents()
+        return window
+
+    def test_the_boxes_of_an_annotation_next_to_the_image_are_shown(self):
+        # The annotations are saved somewhere else, the ones of the images are
+        # still shown instead of an empty canvas.
+        save_dir = os.path.join(self.base_dir, 'annotations')
+        os.makedirs(save_dir)
+
+        window = self.given_window_with_one_image(save_dir)
+        self.given_file(self.dir_path, 'img_1.txt', '1 0.5 0.5 0.4 0.4\n')
+        self.given_file(self.dir_path, 'classes.txt', 'cat\ndog\n')
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+
+        self.assertEqual(['dog'], [shape.label for shape in window.canvas.shapes])
+
+    def test_the_boxes_of_an_annotation_in_the_save_directory_are_shown(self):
+        save_dir = os.path.join(self.base_dir, 'annotations')
+        os.makedirs(save_dir)
+
+        window = self.given_window_with_one_image(save_dir)
+        self.given_file(save_dir, 'img_1.txt', '1 0.5 0.5 0.4 0.4\n')
+        self.given_file(save_dir, 'classes.txt', 'cat\ndog\n')
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+
+        self.assertEqual(['dog'], [shape.label for shape in window.canvas.shapes])
+
+    def test_the_boxes_are_shown_when_the_class_list_is_in_the_dataset_root(self):
+        # The layout of the readme: images, labels and classes.txt above both.
+        labels_dir = os.path.join(self.base_dir, 'labels')
+        os.makedirs(labels_dir)
+
+        window = self.given_window_with_one_image(labels_dir)
+        self.given_file(labels_dir, 'img_1.txt', '1 0.5 0.5 0.4 0.4\n')
+        self.given_file(self.base_dir, 'classes.txt', 'cat\ndog\n')
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+
+        self.assertEqual(['dog'], [shape.label for shape in window.canvas.shapes])
+
+    def test_the_class_list_of_the_dataset_is_offered_as_a_label(self):
+        window = self.given_window_with_one_image()
+        self.given_file(self.dir_path, 'img_1.txt', '3 0.5 0.5 0.4 0.4\n')
+        self.given_file(self.dir_path, 'classes.txt', 'cat\ndog\ncow\n')
+
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+
+        # An unknown index does not drop the box, and the name of the class
+        # stays the same the next time the annotation is saved.
+        self.assertEqual(['class3'], [shape.label for shape in window.canvas.shapes])
+        self.assertIn('class3', window.label_hist)
+
+    def test_the_boxes_of_an_xml_next_to_the_image_are_shown(self):
+        save_dir = os.path.join(self.base_dir, 'annotations')
+        os.makedirs(save_dir)
+
+        window = self.given_window_with_one_image(save_dir)
+        self.given_file(self.dir_path, 'img_1.xml', self.voc_xml(['cat']))
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+
+        self.assertEqual(['cat'], [shape.label for shape in window.canvas.shapes])
+
+    def test_a_damaged_object_does_not_hide_the_other_boxes(self):
+        window = self.given_window_with_one_image()
+        xml = ('<annotation><object><name>cat</name><bndbox>'
+               '<xmin>2</xmin><ymin>2</ymin><xmax>x</xmax><ymax>8</ymax>'
+               '</bndbox></object>'
+               '<object><name>dog</name><bndbox>'
+               '<xmin>2</xmin><ymin>2</ymin><xmax>8</xmax><ymax>8</ymax>'
+               '</bndbox></object></annotation>')
+        self.given_file(self.dir_path, 'img_1.xml', xml)
+
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+
+        self.assertEqual(['dog'], [shape.label for shape in window.canvas.shapes])
+
+    def test_an_xml_without_the_optional_fields_still_shows_its_boxes(self):
+        window = self.given_window_with_one_image()
+        xml = ('<annotation><object><name>cat</name><pose>Unspecified</pose>'
+               '<truncated>0</truncated><difficult>0</difficult><bndbox>'
+               '<xmin>1</xmin><ymin>1</ymin><xmax>9</xmax><ymax>9</ymax>'
+               '</bndbox></object></annotation>')
+        self.given_file(self.dir_path, 'img_1.xml', xml)
+
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+
+        self.assertEqual(['cat'], [shape.label for shape in window.canvas.shapes])
 
 if __name__ == '__main__':
     unittest.main()

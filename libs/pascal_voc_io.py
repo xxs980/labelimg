@@ -5,6 +5,8 @@ from xml.etree import ElementTree
 from xml.etree.ElementTree import Element, SubElement
 from lxml import etree
 import codecs
+import locale
+import re
 from libs.constants import DEFAULT_ENCODING
 from libs.ustr import ustr
 
@@ -135,40 +137,97 @@ class PascalVocReader:
         self.shapes = []
         self.file_path = file_path
         self.verified = False
+        self.warnings = []
         try:
             self.parse_xml()
-        except:
-            pass
+        except Exception as e:
+            # A broken annotation must not keep the image from opening.
+            self.warn('Failed to read {0}: {1}'.format(file_path, e))
 
     def get_shapes(self):
         return self.shapes
 
+    def warn(self, message):
+        """Remember a problem of the annotation instead of hiding it."""
+        if message not in self.warnings:
+            self.warnings.append(message)
+        print(message)
+
+    def read_tree(self):
+        """Parse the file, tolerating what another tool left behind."""
+        with open(self.file_path, 'rb') as xml_file:
+            content = xml_file.read()
+
+        try:
+            return etree.fromstring(content, etree.XMLParser(encoding=ENCODE_METHOD))
+        except etree.XMLSyntaxError:
+            pass
+
+        # Such a file claims an encoding that its bytes do not hold, or it is
+        # cut short. The bounding boxes of it are still usable.
+        for encoding in (ENCODE_METHOD, locale.getpreferredencoding(False)):
+            try:
+                text = content.decode(encoding)
+            except (LookupError, TypeError, UnicodeDecodeError):
+                continue
+            text = re.sub(r'^\s*<\?xml[^>]*\?>', '', text)
+            try:
+                parser = etree.XMLParser(encoding=ENCODE_METHOD, recover=True)
+                return etree.fromstring(text.encode('utf-8'), parser)
+            except etree.XMLSyntaxError:
+                continue
+
+        raise ValueError('unsupported or damaged xml file')
+
+    def read_difficult(self, object_iter):
+        """Read the difficult flag, which the tools write in different ways."""
+        node = object_iter.find('difficult')
+        text = ustr(node.text).strip() if node is not None and node.text else ''
+        if text in ('1', 'true', 'yes'):
+            return True
+        if text and text not in ('0', 'false', 'no'):
+            self.warn('Invalid difficult flag {0} in {1}.'.format(text, self.file_path))
+        return False
+
     def add_shape(self, label, bnd_box, difficult):
-        x_min = int(float(bnd_box.find('xmin').text))
-        y_min = int(float(bnd_box.find('ymin').text))
-        x_max = int(float(bnd_box.find('xmax').text))
-        y_max = int(float(bnd_box.find('ymax').text))
+        if bnd_box is None:
+            raise ValueError('the object has no bndbox')
+
+        x_min = self.read_coordinate(bnd_box, 'xmin')
+        y_min = self.read_coordinate(bnd_box, 'ymin')
+        x_max = self.read_coordinate(bnd_box, 'xmax')
+        y_max = self.read_coordinate(bnd_box, 'ymax')
         points = [(x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)]
         self.shapes.append((label, points, None, None, difficult))
 
-    def parse_xml(self):
-        assert self.file_path.endswith(XML_EXT), "Unsupported file format"
-        parser = etree.XMLParser(encoding=ENCODE_METHOD)
-        xml_tree = ElementTree.parse(self.file_path, parser=parser).getroot()
-        filename = xml_tree.find('filename').text
+    @staticmethod
+    def read_coordinate(bnd_box, name):
+        node = bnd_box.find(name)
+        text = ustr(node.text).strip() if node is not None and node.text else ''
         try:
-            verified = xml_tree.attrib['verified']
-            if verified == 'yes':
-                self.verified = True
-        except KeyError:
-            self.verified = False
+            return int(round(float(text)))
+        except ValueError:
+            raise ValueError('the value of {0} is missing or is not a number'.format(name))
 
-        for object_iter in xml_tree.findall('object'):
-            bnd_box = object_iter.find("bndbox")
-            label = object_iter.find('name').text
-            # Add chris
-            difficult = False
-            if object_iter.find('difficult') is not None:
-                difficult = bool(int(object_iter.find('difficult').text))
-            self.add_shape(label, bnd_box, difficult)
+    def parse_xml(self):
+        if not self.file_path.endswith(XML_EXT):
+            raise ValueError('unsupported file format: {0}'.format(self.file_path))
+
+        xml_tree = self.read_tree()
+        self.verified = xml_tree.attrib.get('verified') == 'yes'
+
+        objects = xml_tree.findall('object')
+        for index, object_iter in enumerate(objects, start=1):
+            try:
+                name = object_iter.find('name')
+                label = ustr(name.text).strip() if name is not None and name.text else ''
+                # Add chris
+                self.add_shape(label, object_iter.find('bndbox'),
+                               self.read_difficult(object_iter))
+            except (AttributeError, TypeError, ValueError) as e:
+                # One damaged object must not hide the boxes of the others.
+                self.warn('Skipping object {0} of {1}: {2}'.format(index, self.file_path, e))
+
+        if objects and not self.shapes:
+            self.warn('No bounding box could be read from {0}.'.format(self.file_path))
         return True

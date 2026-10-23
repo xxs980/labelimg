@@ -12,6 +12,9 @@ from libs.constants import DEFAULT_ENCODING
 TXT_EXT = '.txt'
 ENCODE_METHOD = DEFAULT_ENCODING
 
+CLASS_LIST_FILENAME = 'classes.txt'
+UNKNOWN_CLASS_PREFIX = 'class'
+
 
 def read_class_list(class_list_path):
     """Read the class names of a yolo dataset, tolerating odd encodings."""
@@ -34,6 +37,61 @@ def read_class_list(class_list_path):
         return []
 
     return [line.strip() for line in content.splitlines() if line.strip()]
+
+
+def unknown_class_name(index):
+    return '{0}{1}'.format(UNKNOWN_CLASS_PREFIX, index)
+
+
+def find_class_list_path(annot_path=None, img_path=None, extra_dirs=None):
+    """Look for the classes.txt that belongs to an annotation or an image.
+
+    A yolo file only stores class indexes, the names live in a classes.txt.
+    Datasets keep that file next to the annotations, next to the images or in
+    the root of the dataset, so all of those places are tried before giving up.
+    """
+    candidates = []
+
+    def add_dir(directory):
+        directory = os.path.abspath(directory)
+        # The directory itself and the two above it.
+        for _ in range(3):
+            candidate = os.path.join(directory, CLASS_LIST_FILENAME)
+            if candidate not in candidates:
+                candidates.append(candidate)
+            parent = os.path.dirname(directory)
+            if parent == directory:
+                break
+            directory = parent
+
+    for path in (annot_path, img_path):
+        if path:
+            add_dir(os.path.dirname(path))
+    for directory in extra_dirs or []:
+        if directory:
+            add_dir(directory)
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def read_lines(file_path):
+    """Read a text file without failing on the encoding of another tool."""
+    for encoding in ('utf-8-sig', None):
+        try:
+            with codecs.open(file_path, 'r', encoding=encoding) as text_file:
+                return text_file.read().splitlines()
+        except UnicodeDecodeError:
+            continue
+        except (IOError, OSError) as e:
+            print('Failed to read {0}: {1}'.format(file_path, e))
+            return []
+
+    # A damaged line is better than losing the whole annotation.
+    with codecs.open(file_path, 'r', encoding='utf-8', errors='replace') as text_file:
+        return text_file.read().splitlines()
 
 
 class YOLOWriter:
@@ -111,23 +169,22 @@ class YOLOWriter:
 
 class YoloReader:
 
-    def __init__(self, file_path, image, class_list_path=None):
+    def __init__(self, file_path, image, class_list_path=None, img_path=None,
+                 extra_class_dirs=None):
         # shapes type:
         # [labbel, [(x1,y1), (x2,y2), (x3,y3), (x4,y4)], color, color, difficult]
         self.shapes = []
         self.file_path = file_path
+        self.warnings = []
 
         if class_list_path is None:
-            dir_path = os.path.dirname(os.path.realpath(self.file_path))
-            self.class_list_path = os.path.join(dir_path, "classes.txt")
-        else:
-            self.class_list_path = class_list_path
+            class_list_path = find_class_list_path(file_path, img_path, extra_class_dirs)
 
-        # print (file_path, self.class_list_path)
-
-        self.classes = read_class_list(self.class_list_path)
-
-        # print (self.classes)
+        self.class_list_path = class_list_path
+        self.classes = read_class_list(class_list_path)
+        if not self.classes:
+            self.warn('No class list was found for {0}: classes are named after '
+                      'their index.'.format(file_path))
 
         img_size = [image.height(), image.width(),
                     1 if image.isGrayscale() else 3]
@@ -135,13 +192,31 @@ class YoloReader:
         self.img_size = img_size
 
         self.verified = False
-        # try:
         self.parse_yolo_format()
-        # except:
-        #     pass
+
+    def warn(self, message):
+        """Remember a problem of the annotation instead of hiding it."""
+        if message not in self.warnings:
+            self.warnings.append(message)
+        print(message)
 
     def get_shapes(self):
         return self.shapes
+
+    def get_class_list(self):
+        """The class names in the order of their index."""
+        return list(self.classes)
+
+    def class_name(self, index):
+        if index >= len(self.classes):
+            # A box is never dropped because the class list is too short. The
+            # missing classes keep their index, so the annotation can be fixed
+            # instead of silently disappearing.
+            self.warn('Class index {0} is missing from {1}.'.format(
+                index, self.class_list_path or CLASS_LIST_FILENAME))
+            self.classes.extend(
+                unknown_class_name(i) for i in range(len(self.classes), index + 1))
+        return self.classes[index]
 
     def add_shape(self, label, x_min, y_min, x_max, y_max, difficult):
 
@@ -153,21 +228,20 @@ class YoloReader:
             index = int(class_index)
             x_center, y_center, w, h = [float(value) for value in (x_center, y_center, w, h)]
         except ValueError:
-            print('Invalid yolo values in {0}: {1} {2} {3} {4} {5}'.format(
+            self.warn('Invalid yolo values in {0}: {1} {2} {3} {4} {5}'.format(
                 self.file_path, class_index, x_center, y_center, w, h))
             return None
 
         if not all(math.isfinite(value) for value in (x_center, y_center, w, h)):
-            print('Non-finite yolo values in {0}: {1} {2} {3} {4} {5}'.format(
+            self.warn('Non-finite yolo values in {0}: {1} {2} {3} {4} {5}'.format(
                 self.file_path, class_index, x_center, y_center, w, h))
             return None
 
-        if not 0 <= index < len(self.classes):
-            print('Unknown class index {0} in {1}: only {2} classes are known.'.format(
-                index, self.file_path, len(self.classes)))
+        if index < 0:
+            self.warn('Negative class index {0} in {1}.'.format(index, self.file_path))
             return None
 
-        label = self.classes[index]
+        label = self.class_name(index)
 
         x_min = max(x_center - w / 2, 0)
         x_max = min(x_center + w / 2, 1)
@@ -181,27 +255,53 @@ class YoloReader:
 
         return label, x_min, y_min, x_max, y_max
 
+    def polygon_line_to_shape(self, fields):
+        """Use the frame of a yolo segmentation polygon as a bounding box."""
+        try:
+            values = [float(value) for value in fields[1:]]
+        except ValueError:
+            self.warn('Invalid yolo values in {0}: {1}'.format(
+                self.file_path, ' '.join(fields)))
+            return None
+
+        if not all(math.isfinite(value) for value in values):
+            self.warn('Non-finite yolo values in {0}.'.format(self.file_path))
+            return None
+
+        x_values = values[0::2]
+        y_values = values[1::2]
+        return self.yolo_line_to_shape(
+            fields[0],
+            (min(x_values) + max(x_values)) / 2, (min(y_values) + max(y_values)) / 2,
+            max(x_values) - min(x_values), max(y_values) - min(y_values))
+
     def parse_yolo_format(self):
         if not os.path.isfile(self.file_path):
-            print('Annotation file not found: {0}'.format(self.file_path))
+            self.warn('Annotation file not found: {0}'.format(self.file_path))
             return
 
-        with codecs.open(self.file_path, 'r', encoding='utf-8-sig') as bnd_box_file:
-            for line_number, bnd_box in enumerate(bnd_box_file, start=1):
-                # Values are separated by whitespace, blank lines are allowed.
-                fields = bnd_box.split()
-                if not fields:
-                    continue
+        for line_number, bnd_box in enumerate(read_lines(self.file_path), start=1):
+            # Values are separated by whitespace, blank lines are allowed.
+            fields = bnd_box.split()
+            if not fields:
+                continue
 
-                if len(fields) != 5:
-                    print('Skipping line {0} of {1}: expected 5 values, got {2}.'.format(
-                        line_number, self.file_path, len(fields)))
-                    continue
-
+            if len(fields) == 5:
                 shape = self.yolo_line_to_shape(*fields)
-                if shape is None:
-                    continue
+            elif len(fields) > 5 and (len(fields) - 1) % 2 == 0:
+                # Losing the annotation of a polygon would drop it from the
+                # file the next time it is saved, so keep its frame.
+                self.warn('Line {0} of {1} is a polygon, its frame is used '
+                          'instead.'.format(line_number, self.file_path))
+                shape = self.polygon_line_to_shape(fields)
+            else:
+                self.warn('Skipping line {0} of {1}: {2} values instead of '
+                          '5.'.format(line_number, self.file_path, len(fields)))
+                continue
 
-                label, x_min, y_min, x_max, y_max = shape
-                # Caveat: difficult flag is discarded when saved as yolo format.
-                self.add_shape(label, x_min, y_min, x_max, y_max, False)
+            if shape is None:
+                continue
+
+            label, x_min, y_min, x_max, y_max = shape
+            # Caveat: difficult flag is discarded when saved as yolo format.
+            self.add_shape(label, x_min, y_min, x_max, y_max, False)

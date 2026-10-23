@@ -141,7 +141,10 @@ cat
 pig
 ```
 
-Put `classes.txt` in 2 place, in `labels` directory and same level as `labels` directory
+Put `classes.txt` in the `labels` directory, the directory of the annotations. It is
+also looked for next to the images and one level above both, so the file may stay
+wherever your dataset already keeps it. Without that file the boxes are still shown,
+but their classes are named `class0`, `class1`, ... after the index in the `.txt`.
 
 Full structure of workspace as below
 

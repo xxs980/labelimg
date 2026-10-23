@@ -128,16 +128,39 @@ class CreateMLReader:
         self.shapes = []
         self.verified = False
         self.filename = os.path.basename(file_path)
+        self.warnings = []
         try:
             self.parse_json()
         except ValueError:
-            print("JSON decoding failed")
+            self.warn('Failed to parse {0}.'.format(json_path))
         except (KeyError, TypeError) as e:
-            print('Unexpected CreateML format in {0}: {1}'.format(self.json_path, e))
+            self.warn('Unexpected CreateML format in {0}: {1}'.format(json_path, e))
+
+    def warn(self, message):
+        """Remember a problem of the annotation instead of hiding it."""
+        if message not in self.warnings:
+            self.warnings.append(message)
+        print(message)
+
+    def read_content(self):
+        """Read the file, tolerating the encoding another tool chose."""
+        for encoding in (ENCODE_METHOD, 'utf-8-sig', None):
+            try:
+                with codecs.open(self.json_path, 'r', encoding=encoding) as file:
+                    return file.read()
+            except UnicodeDecodeError:
+                continue
+            except (IOError, OSError) as e:
+                self.warn('Failed to read {0}: {1}'.format(self.json_path, e))
+                return None
+
+        self.warn('Failed to decode {0}.'.format(self.json_path))
+        return None
 
     def parse_json(self):
-        with codecs.open(self.json_path, 'r', encoding=ENCODE_METHOD) as file:
-            input_data = file.read()
+        input_data = self.read_content()
+        if input_data is None:
+            return
 
         output_dict = json.loads(input_data)
         self.verified = True
@@ -159,11 +182,11 @@ class CreateMLReader:
             width = float(bnd_box["width"])
             height = float(bnd_box["height"])
         except (KeyError, TypeError, ValueError) as e:
-            print('Skipping a CreateML annotation of {0}: {1}'.format(self.json_path, e))
+            self.warn('Skipping a CreateML annotation of {0}: {1}'.format(self.json_path, e))
             return
 
         if not all(math.isfinite(value) for value in (x, y, width, height)):
-            print('Skipping non-finite CreateML coordinates in {0}.'.format(self.json_path))
+            self.warn('Skipping non-finite CreateML coordinates in {0}.'.format(self.json_path))
             return
 
         x_min = x - (width / 2)

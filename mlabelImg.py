@@ -113,7 +113,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.screencast = "https://youtu.be/p0nR2YsCY_U"
 
         # Load predefined classes to the list
-        self.load_predefined_classes(default_prefdef_class_file)
+        self.predef_class_file = default_prefdef_class_file
+        self.load_predefined_classes(self.predef_class_file)
 
         # Main widgets and related state.
         self.label_dialog = LabelDialog(parent=self, list_item=self.label_hist)
@@ -1149,29 +1150,26 @@ class MainWindow(QMainWindow, WindowMixin):
         return '[{} / {}]'.format(self.cur_img_idx + 1, self.img_count)
 
     def show_bounding_box_from_annotation_file(self, file_path):
-        if self.default_save_dir is not None:
-            basename = os.path.basename(os.path.splitext(file_path)[0])
-            xml_path = os.path.join(self.default_save_dir, basename + XML_EXT)
-            txt_path = os.path.join(self.default_save_dir, basename + TXT_EXT)
-            json_path = os.path.join(self.default_save_dir, basename + JSON_EXT)
+        """Show the annotation that belongs to an image.
 
-            """Annotation file priority:
-            PascalXML > YOLO
-            """
-            if os.path.isfile(xml_path):
-                self.load_pascal_xml_by_filename(xml_path)
-            elif os.path.isfile(txt_path):
-                self.load_yolo_txt_by_filename(txt_path)
-            elif os.path.isfile(json_path):
-                self.load_create_ml_json_by_filename(json_path, file_path)
+        The annotation is looked up in the directory it is saved to and next to
+        the image, so that a separate annotation directory never hides the
+        boxes of the images.
+        """
+        file_path = ustr(file_path)
+        found = {}
+        for annotation_path in self.annotation_file_paths(file_path):
+            found.setdefault(os.path.splitext(annotation_path)[1], annotation_path)
 
-        else:
-            xml_path = os.path.splitext(file_path)[0] + XML_EXT
-            txt_path = os.path.splitext(file_path)[0] + TXT_EXT
-            if os.path.isfile(xml_path):
-                self.load_pascal_xml_by_filename(xml_path)
-            elif os.path.isfile(txt_path):
-                self.load_yolo_txt_by_filename(txt_path)
+        """Annotation file priority:
+        PascalXML > YOLO > CreateML
+        """
+        if XML_EXT in found:
+            self.load_pascal_xml_by_filename(found[XML_EXT])
+        elif TXT_EXT in found:
+            self.load_yolo_txt_by_filename(found[TXT_EXT])
+        elif JSON_EXT in found:
+            self.load_create_ml_json_by_filename(found[JSON_EXT], file_path)
 
     def resizeEvent(self, event):
         if self.canvas and not self.image.isNull()\
@@ -1517,14 +1515,15 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.saveAs.setEnabled(False)
 
     def annotation_file_paths(self, file_path):
-        """Return the existing annotation files that belong to the given image."""
-        basename = os.path.basename(os.path.splitext(file_path)[0])
-        search_dirs = [os.path.dirname(file_path)]
+        """Return the existing annotation files of an image, best match first."""
+        image_dir = os.path.dirname(os.path.abspath(ustr(file_path)))
+        search_dirs = []
         if self.default_save_dir:
-            save_dir = ustr(self.default_save_dir)
-            if os.path.abspath(save_dir) != os.path.abspath(search_dirs[0]):
-                search_dirs.append(save_dir)
+            search_dirs.append(os.path.abspath(ustr(self.default_save_dir)))
+        if image_dir not in search_dirs:
+            search_dirs.append(image_dir)
 
+        basename = os.path.basename(os.path.splitext(ustr(file_path))[0])
         annotation_paths = []
         for search_dir in search_dirs:
             for extension in (XML_EXT, TXT_EXT, JSON_EXT):
@@ -1663,6 +1662,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         t_voc_parse_reader = PascalVocReader(xml_path)
         shapes = t_voc_parse_reader.get_shapes()
+        self.show_annotation_warnings(getattr(t_voc_parse_reader, 'warnings', None), shapes)
         self.load_labels(shapes)
         self.canvas.verified = t_voc_parse_reader.verified
 
@@ -1673,9 +1673,27 @@ class MainWindow(QMainWindow, WindowMixin):
             return
 
         self.set_format(FORMAT_YOLO)
-        t_yolo_parse_reader = YoloReader(txt_path, self.image)
+
+        # A yolo file holds class indexes only. The names can live in the
+        # directory of the annotation, of the image or in the predefined class
+        # file given on the command line, so all of them are offered.
+        extra_class_dirs = [os.path.dirname(ustr(self.file_path))]
+        if self.default_save_dir:
+            extra_class_dirs.append(ustr(self.default_save_dir))
+        if self.predef_class_file:
+            extra_class_dirs.append(os.path.dirname(ustr(self.predef_class_file)))
+        t_yolo_parse_reader = YoloReader(txt_path, self.image,
+                                         img_path=ustr(self.file_path),
+                                         extra_class_dirs=extra_class_dirs)
         shapes = t_yolo_parse_reader.get_shapes()
-        print("load_yolo_txt_by_filename", shapes)
+
+        # The window has to know the names of the classes, otherwise saving the
+        # annotation would rename them or shift their indexes.
+        for class_name in t_yolo_parse_reader.get_class_list():
+            if class_name not in self.label_hist:
+                self.label_hist.append(class_name)
+
+        self.show_annotation_warnings(t_yolo_parse_reader.warnings, shapes)
         self.load_labels(shapes)
         self.canvas.verified = t_yolo_parse_reader.verified
 
@@ -1689,8 +1707,18 @@ class MainWindow(QMainWindow, WindowMixin):
 
         create_ml_parse_reader = CreateMLReader(json_path, file_path)
         shapes = create_ml_parse_reader.get_shapes()
+        self.show_annotation_warnings(getattr(create_ml_parse_reader, 'warnings', None), shapes)
         self.load_labels(shapes)
         self.canvas.verified = create_ml_parse_reader.verified
+
+    def show_annotation_warnings(self, warnings, shapes):
+        """Tell why an annotation did not show up instead of showing nothing."""
+        if not warnings:
+            return
+        message = '; '.join(ustr(warning) for warning in warnings[:3])
+        if len(warnings) > 3:
+            message += ' (+{0} more)'.format(len(warnings) - 3)
+        self.status('({0} box(es)) {1}'.format(len(shapes or []), message), 15000)
 
     def copy_previous_bounding_boxes(self):
         if not self.file_path or self.file_path not in self.m_img_list:

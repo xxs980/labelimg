@@ -1,4 +1,4 @@
-﻿import codecs
+import codecs
 import os
 import shutil
 import sys
@@ -52,7 +52,13 @@ class TestYoloReader(unittest.TestCase):
         with open(self.txt_path, 'w') as txt_file:
             txt_file.write('0 0.5 0.5 0.2 0.2\n')
 
-        self.assertEqual([], self.read_shapes())
+        # The name of the class is unknown, the box is not lost.
+        reader = YoloReader(self.txt_path, self.image,
+                            class_list_path=os.path.join(self.tmp_dir, 'missing.txt'))
+        shapes = reader.get_shapes()
+
+        self.assertEqual(['class0'], [shape[0] for shape in shapes])
+        self.assertTrue(reader.warnings)
 
     def test_missing_annotation_file_is_not_fatal(self):
         self.write_classes('cat\n')
@@ -88,14 +94,85 @@ class TestYoloReader(unittest.TestCase):
 
         self.assertEqual(1, len(self.read_shapes()))
 
-    def test_class_index_out_of_range_is_skipped(self):
+    def test_class_index_out_of_range_keeps_the_box(self):
         self.write_classes('cat\ndog\n')
         with open(self.txt_path, 'w') as txt_file:
             txt_file.write('9 0.5 0.5 0.2 0.2\n0 0.5 0.5 0.2 0.2\n')
 
-        shapes = self.read_shapes()
+        reader = YoloReader(self.txt_path, self.image)
+        shapes = reader.get_shapes()
 
-        self.assertEqual(['cat'], [shape[0] for shape in shapes])
+        self.assertEqual(['class9', 'cat'], [shape[0] for shape in shapes])
+        # The index of a known class does not move when a larger one appears.
+        self.assertEqual(10, len(reader.get_class_list()))
+        self.assertTrue(reader.warnings)
+
+    def test_class_list_of_the_dataset_root_is_used(self):
+        images_dir = os.path.join(self.tmp_dir, 'images')
+        labels_dir = os.path.join(self.tmp_dir, 'labels')
+        os.makedirs(images_dir)
+        os.makedirs(labels_dir)
+        image_path = os.path.join(images_dir, 'img.png')
+        image = make_image(image_path)
+        txt_path = os.path.join(labels_dir, 'img.txt')
+        with open(txt_path, 'w') as txt_file:
+            txt_file.write('1 0.5 0.5 0.2 0.2\n')
+        # classes.txt sits above both of them, as the readme describes it.
+        self.write_classes('cat\ndog\n')
+
+        shapes = YoloReader(txt_path, image, img_path=image_path).get_shapes()
+
+        self.assertEqual(['dog'], [shape[0] for shape in shapes])
+
+    def test_class_list_next_to_the_image_is_used(self):
+        images_dir = os.path.join(self.tmp_dir, 'data', 'images')
+        labels_dir = os.path.join(self.tmp_dir, 'labels')
+        os.makedirs(images_dir)
+        os.makedirs(labels_dir)
+        image_path = os.path.join(images_dir, 'img.png')
+        image = make_image(image_path)
+        txt_path = os.path.join(labels_dir, 'img.txt')
+        with open(txt_path, 'w') as txt_file:
+            txt_file.write('1 0.5 0.5 0.2 0.2\n')
+        with codecs.open(os.path.join(images_dir, 'classes.txt'), 'w', encoding='utf-8') as classes_file:
+            classes_file.write('cat\ndog\n')
+
+        shapes = YoloReader(txt_path, image, img_path=image_path).get_shapes()
+
+        self.assertEqual(['dog'], [shape[0] for shape in shapes])
+
+    def test_class_list_next_to_the_annotation_wins(self):
+        labels_dir = os.path.join(self.tmp_dir, 'labels')
+        os.makedirs(labels_dir)
+        txt_path = os.path.join(labels_dir, 'img.txt')
+        with open(txt_path, 'w') as txt_file:
+            txt_file.write('1 0.5 0.5 0.2 0.2\n')
+        with open(os.path.join(labels_dir, 'classes.txt'), 'w') as classes_file:
+            classes_file.write('one\ntwo\n')
+        self.write_classes('cat\ndog\n')
+
+        shapes = YoloReader(txt_path, self.image, img_path=self.image_path).get_shapes()
+
+        self.assertEqual(['two'], [shape[0] for shape in shapes])
+
+    def test_polygon_line_uses_the_frame_of_the_polygon(self):
+        self.write_classes('cat\ndog\n')
+        with open(self.txt_path, 'w') as txt_file:
+            txt_file.write('0 0.1 0.1 0.5 0.1 0.5 0.4 0.1 0.4\n')
+
+        reader = YoloReader(self.txt_path, self.image)
+        shapes = reader.get_shapes()
+
+        self.assertEqual(1, len(shapes))
+        self.assertEqual([(10, 5), (50, 5), (50, 20), (10, 20)], shapes[0][1])
+        self.assertTrue(reader.warnings)
+
+    def test_negative_class_index_is_skipped(self):
+        self.write_classes('cat\ndog\n')
+        with open(self.txt_path, 'w') as txt_file:
+            txt_file.write('-1 0.5 0.5 0.2 0.2\n')
+
+        self.assertEqual([], self.read_shapes())
 
     def test_non_numeric_class_index_is_skipped(self):
         self.write_classes('cat\ndog\n')
