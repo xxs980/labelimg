@@ -44,6 +44,7 @@ class MainWindowTestCase(unittest.TestCase):
 
         # Never block on a modal dialog, the answer is controlled per test.
         self.reply = QMessageBox.Yes
+        self.dialogs = []
         for name in ('question', 'information', 'warning', 'critical'):
             original = getattr(QMessageBox, name)
             self.addCleanup(setattr, QMessageBox, name, original)
@@ -51,6 +52,7 @@ class MainWindowTestCase(unittest.TestCase):
 
     def _stub_dialog(self, name):
         def dialog(*_args, **_kwargs):
+            self.dialogs.append(name)
             if name == 'question':
                 return self.reply
             return QMessageBox.Ok
@@ -79,6 +81,10 @@ class MainWindowTestCase(unittest.TestCase):
         with open(path, 'w') as handle:
             handle.write(content)
         return path
+
+    def read_words(self, path):
+        with open(path) as handle:
+            return handle.read().split()
 
     def current_name(self, window):
         return os.path.basename(window.file_path) if window.file_path else None
@@ -165,16 +171,15 @@ class MainWindowTestCase(unittest.TestCase):
         self.assertFalse(os.path.exists(annotation))
         self.assertFalse(os.path.exists(os.path.join(self.dir_path, 'img_1.png')))
 
-    def test_deleting_is_cancelled_when_answered_no(self):
+    def test_deleting_an_image_does_not_ask_for_confirmation(self):
         self.make_images(2)
         window = self.given_current_image(self.open_dir(), 'img_1.png')
-        self.reply = QMessageBox.No
 
         window.delete_image()
 
-        self.assertEqual('img_1.png', self.current_name(window))
-        self.assertTrue(os.path.isfile(os.path.join(self.dir_path, 'img_1.png')))
-        self.assertEqual(2, window.img_count)
+        self.assertNotIn('question', self.dialogs)
+        self.assertEqual(['img_2.png'], self.names(window))
+        self.assertFalse(os.path.isfile(os.path.join(self.dir_path, 'img_1.png')))
 
     def test_deleting_without_an_open_image_works(self):
         self.make_images(1)
@@ -428,6 +433,52 @@ class MainWindowTestCase(unittest.TestCase):
         window.load_file(os.path.join(self.dir_path, 'img_1.png'))
 
         self.assertEqual(['cat'], [shape.label for shape in window.canvas.shapes])
+
+    def given_yolo_window(self, classes, boxes):
+        self.make_images(1)
+        self.given_file(self.dir_path, 'classes.txt', classes)
+        window = mlabelImg.MainWindow(self.dir_path, None, self.dir_path)
+        self.given_file(self.dir_path, 'img_1.txt', boxes)
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+        self.assertEqual(classes.split(), window.label_hist)
+        return window
+
+    def test_renaming_a_label_overwrites_its_class_in_place(self):
+        window = self.given_yolo_window('cat\ndog\n', '0 0.5 0.5 0.4 0.4\n')
+
+        window.label_list.item(0).setText('car')
+
+        # The name is replaced, its index in the class list does not move.
+        self.assertEqual(['car', 'dog'], window.label_hist)
+        window.save_file()
+        self.assertEqual(['car', 'dog'], self.read_words(os.path.join(self.dir_path, 'classes.txt')))
+        self.assertEqual(['0', '0.500000', '0.500000', '0.400000', '0.400000'],
+                         self.read_words(os.path.join(self.dir_path, 'img_1.txt')))
+
+    def test_renaming_keeps_a_class_that_another_box_still_uses(self):
+        window = self.given_yolo_window('cat\ndog\n',
+                                        '0 0.5 0.5 0.4 0.4\n0 0.2 0.2 0.2 0.2\n')
+
+        window.label_list.item(1).setText('cow')
+
+        self.assertEqual(['cat', 'dog', 'cow'], window.label_hist)
+        window.save_file()
+        self.assertEqual(['cat', 'dog', 'cow'],
+                         self.read_words(os.path.join(self.dir_path, 'classes.txt')))
+        indexes = [line.split()[0] for line in
+                   open(os.path.join(self.dir_path, 'img_1.txt')).read().splitlines()]
+        self.assertEqual(['0', '2'], indexes)
+
+    def test_renaming_to_an_existing_class_does_not_duplicate_it(self):
+        window = self.given_yolo_window('cat\ndog\n', '0 0.5 0.5 0.4 0.4\n')
+
+        window.label_list.item(0).setText('dog')
+
+        self.assertEqual(['cat', 'dog'], window.label_hist)
+        window.save_file()
+        self.assertEqual(['cat', 'dog'], self.read_words(os.path.join(self.dir_path, 'classes.txt')))
+        self.assertEqual(['1', '0.500000', '0.500000', '0.400000', '0.400000'],
+                         self.read_words(os.path.join(self.dir_path, 'img_1.txt')))
 
 if __name__ == '__main__':
     unittest.main()

@@ -9,6 +9,7 @@ import re
 import sys
 import subprocess
 import shutil
+import time
 import webbrowser as wb
 
 from functools import partial
@@ -935,11 +936,40 @@ class MainWindow(QMainWindow, WindowMixin):
         shape = self.items_to_shapes[item]
         label = item.text()
         if label != shape.label:
-            shape.label = item.text()
+            old_label = shape.label
+            shape.label = label
             shape.line_color = generate_color_by_text(shape.label)
+            self.rename_class(old_label, shape.label)
+            self.update_combo_box()
             self.set_dirty()
         else:  # User probably changed item visibility
             self.canvas.set_shape_visible(shape, item.checkState() == Qt.Checked)
+
+    def rename_class(self, old_label, new_label):
+        """Rename a class in place, so that its index in classes.txt stays.
+
+        Overwriting the old name keeps the class indexes of the other
+        annotations of the dataset intact. Only when another box of the image
+        still belongs to the old class it has to be kept as well.
+        """
+        old_label = ustr(old_label)
+        new_label = ustr(new_label)
+        if not old_label or not new_label or old_label == new_label:
+            return
+        if new_label in self.label_hist:
+            # The class is already known, use it instead of adding a copy.
+            return
+
+        try:
+            index = self.label_hist.index(old_label)
+        except ValueError:
+            self.label_hist.append(new_label)
+            return
+
+        if any(shape.label == old_label for shape in self.canvas.shapes):
+            self.label_hist.append(new_label)
+        else:
+            self.label_hist[index] = new_label
 
     # Callback functions:
     def new_shape(self):
@@ -1534,22 +1564,22 @@ class MainWindow(QMainWindow, WindowMixin):
 
     @staticmethod
     def remove_file(file_path):
-        try:
-            os.remove(file_path)
-            return True
-        except OSError as e:
-            print('Failed to remove {}: {}'.format(file_path, e))
-            return False
+        # Windows keeps a file locked for a moment after it was read or written.
+        for attempt in range(3):
+            try:
+                os.remove(file_path)
+                return True
+            except FileNotFoundError:
+                return True
+            except OSError as e:
+                if attempt == 2:
+                    print('Failed to remove {}: {}'.format(file_path, e))
+                    return False
+                time.sleep(0.05)
 
     def delete_image(self, _value=False):
         delete_path = self.file_path
         if not delete_path or not os.path.isfile(delete_path):
-            return
-
-        msg = u'Are you sure you want to delete "{}" and its annotations?'.format(ustr(os.path.basename(delete_path)))
-        reply = QMessageBox.question(self, u'Delete Image', msg,
-                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply != QMessageBox.Yes:
             return
 
         try:

@@ -182,7 +182,11 @@ Next and previous image with `D -> A`
 
 Label with `W`
 
-Delete the current image and its annotation with `T` (asks before deleting)
+Delete the current image and its annotation with `T` (without asking again)
+
+Rename a label by double clicking it in the label list. The name is replaced in
+`classes.txt` in place, so the index of the class does not change and no second
+entry is added.
 
 Delete `.\data\classes.txt` after labeling
 
