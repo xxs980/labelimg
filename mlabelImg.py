@@ -48,6 +48,7 @@ from libs.pascal_voc_io import PascalVocReader
 from libs.pascal_voc_io import XML_EXT
 from libs.yolo_io import YoloReader
 from libs.yolo_io import TXT_EXT
+from libs.yolo_io import CLASS_LIST_FILENAME
 from libs.yolo_io import read_class_list
 from libs.create_ml_io import CreateMLReader
 from libs.create_ml_io import JSON_EXT
@@ -475,6 +476,9 @@ class MainWindow(QMainWindow, WindowMixin):
             self.statusBar().showMessage('%s started. Annotation will be saved to %s' %
                                          (__appname__, self.default_save_dir))
             self.statusBar().show()
+
+        # The labels offered when drawing a box come from the annotations.
+        self.load_save_dir_classes()
 
         self.restoreState(settings.get(SETTING_WIN_STATE, QByteArray()))
         Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
@@ -1301,6 +1305,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if dir_path is not None and len(dir_path) > 1:
             self.default_save_dir = dir_path
+            self.load_save_dir_classes()
 
         self.statusBar().showMessage('%s . Annotation will be saved to %s' %
                                      ('Change saved folder', self.default_save_dir))
@@ -1347,6 +1352,7 @@ class MainWindow(QMainWindow, WindowMixin):
             target_dir_path = ustr(default_open_dir_path)
         self.last_open_dir = target_dir_path
         self.import_dir_images(target_dir_path)
+        self.load_save_dir_classes()
 
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:
@@ -1681,6 +1687,26 @@ class MainWindow(QMainWindow, WindowMixin):
 
         for label in read_class_list(predef_classes_file):
             self.label_hist.append(label)
+
+    def load_save_dir_classes(self):
+        """Suggest the labels that classes.txt of the save directory holds."""
+        if not self.default_save_dir:
+            return
+
+        class_file = os.path.join(ustr(self.default_save_dir), CLASS_LIST_FILENAME)
+        classes = read_class_list(class_file)
+        if classes:
+            self.set_label_hist(classes)
+
+    def set_label_hist(self, classes):
+        """Replace the known classes, their order is their yolo index."""
+        classes = [ustr(label) for label in classes if ustr(label)]
+        if classes == self.label_hist:
+            return
+
+        # The label dialog and the yolo writer keep a reference to this list.
+        del self.label_hist[:]
+        self.label_hist.extend(classes)
 
     def load_pascal_xml_by_filename(self, xml_path):
         if self.file_path is None:

@@ -105,6 +105,43 @@ class MainWindowTestCase(unittest.TestCase):
 
         self.assertEqual(1, window.img_count)
 
+    def test_the_suggested_labels_come_from_the_save_directory(self):
+        save_dir = os.path.join(self.base_dir, 'annotations')
+        os.makedirs(save_dir)
+        self.given_file(save_dir, 'classes.txt', 'cow\nsheep\n')
+        self.make_images(1)
+
+        window = mlabelImg.MainWindow(self.dir_path, CLASS_FILE, save_dir)
+
+        # The classes of the dataset take the place of the predefined ones.
+        self.assertEqual(['cow', 'sheep'], window.label_hist)
+
+    def test_the_predefined_classes_are_used_without_a_class_file(self):
+        save_dir = os.path.join(self.base_dir, 'annotations')
+        os.makedirs(save_dir)
+        predef = self.given_file(self.base_dir, 'predefined.txt', 'person\ncar\n')
+        self.make_images(1)
+
+        window = mlabelImg.MainWindow(self.dir_path, predef, save_dir)
+
+        self.assertEqual(['person', 'car'], window.label_hist)
+
+    def test_changing_the_save_directory_updates_the_suggested_labels(self):
+        first = os.path.join(self.base_dir, 'first')
+        second = os.path.join(self.base_dir, 'second')
+        os.makedirs(first)
+        os.makedirs(second)
+        self.given_file(first, 'classes.txt', 'cat\n')
+        self.given_file(second, 'classes.txt', 'dog\ncow\n')
+        self.make_images(1)
+        window = mlabelImg.MainWindow(self.dir_path, CLASS_FILE, first)
+        self.assertEqual(['cat'], window.label_hist)
+
+        window.default_save_dir = second
+        window.load_save_dir_classes()
+
+        self.assertEqual(['dog', 'cow'], window.label_hist)
+
     def test_deleting_an_image_shows_the_next_one(self):
         self.make_images(3)
         window = self.given_current_image(self.open_dir(), 'img_2.png')

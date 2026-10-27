@@ -146,6 +146,10 @@ also looked for next to the images and one level above both, so the file may sta
 wherever your dataset already keeps it. Without that file the boxes are still shown,
 but their classes are named `class0`, `class1`, ... after the index in the `.txt`.
 
+The labels that are offered when a new box is drawn come from `classes.txt` in the
+save directory (`File -> Change Save Dir`). The predefined class file given on the
+command line is only used while that file does not exist yet.
+
 Full structure of workspace as below
 
 ```
