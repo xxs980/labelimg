@@ -736,7 +736,7 @@ class MainWindow(QMainWindow, WindowMixin):
         text = self.label_dialog.pop_up(item.text())
         if text is not None:
             item.setText(text)
-            item.setBackground(generate_color_by_text(text))
+            item.setBackground(self.color_for_label(text, 70))
             self.set_dirty()
             self.update_combo_box()
 
@@ -797,6 +797,17 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.shapeLineColor.setEnabled(selected)
         self.actions.shapeFillColor.setEnabled(selected)
 
+    def label_color_index(self, label):
+        """Position of the class in the class list, it selects its color."""
+        try:
+            return self.label_hist.index(ustr(label))
+        except ValueError:
+            return None
+
+    def color_for_label(self, label, alpha=255):
+        """A readable color that differs for every class of the dataset."""
+        return generate_color_by_text(label, alpha, self.label_color_index(label))
+
     def add_label(self, shape):
         if shape is None:
             return
@@ -804,7 +815,7 @@ class MainWindow(QMainWindow, WindowMixin):
         item = HashableQListWidgetItem(shape.label)
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
         item.setCheckState(Qt.Checked)
-        item.setBackground(generate_color_by_text(shape.label))
+        item.setBackground(self.color_for_label(shape.label, 70))
         self.items_to_shapes[item] = shape
         self.shapes_to_items[shape] = item
         self.label_list.addItem(item)
@@ -825,6 +836,10 @@ class MainWindow(QMainWindow, WindowMixin):
     def load_labels(self, shapes):
         s = []
         for label, points, line_color, fill_color, difficult in shapes:
+            label = ustr(label)
+            if label not in self.label_hist:
+                # The annotation already uses this class, offer it as well.
+                self.label_hist.append(label)
             shape = Shape(label=label)
             for x, y in points:
 
@@ -841,12 +856,12 @@ class MainWindow(QMainWindow, WindowMixin):
             if line_color:
                 shape.line_color = QColor(*line_color)
             else:
-                shape.line_color = generate_color_by_text(label)
+                shape.line_color = self.color_for_label(label)
 
             if fill_color:
                 shape.fill_color = QColor(*fill_color)
             else:
-                shape.fill_color = generate_color_by_text(label)
+                shape.fill_color = self.color_for_label(label, 70)
 
             self.add_label(shape)
         self.update_combo_box()
@@ -942,8 +957,10 @@ class MainWindow(QMainWindow, WindowMixin):
         if label != shape.label:
             old_label = shape.label
             shape.label = label
-            shape.line_color = generate_color_by_text(shape.label)
             self.rename_class(old_label, shape.label)
+            shape.line_color = self.color_for_label(shape.label)
+            shape.fill_color = self.color_for_label(shape.label, 70)
+            item.setBackground(self.color_for_label(shape.label, 70))
             self.update_combo_box()
             self.set_dirty()
         else:  # User probably changed item visibility
@@ -999,8 +1016,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.diffc_button.setChecked(False)
         if text is not None:
             self.prev_label_text = text
-            generate_color = generate_color_by_text(text)
-            shape = self.canvas.set_last_label(text, generate_color, generate_color)
+            if text not in self.label_hist:
+                self.label_hist.append(text)
+            shape = self.canvas.set_last_label(
+                text, self.color_for_label(text), self.color_for_label(text, 70))
             self.add_label(shape)
             if self.beginner():  # Switch to edit mode.
                 self.canvas.set_editing(True)
@@ -1008,9 +1027,6 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 self.actions.editMode.setEnabled(True)
             self.set_dirty()
-
-            if text not in self.label_hist:
-                self.label_hist.append(text)
         else:
             # self.canvas.undoLastLine()
             self.canvas.reset_all_lines()

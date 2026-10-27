@@ -148,6 +148,8 @@ class MainWindowTestCase(unittest.TestCase):
 
         window.delete_image()
 
+        # The t shortcut must not ask before deleting the image.
+        self.assertNotIn('question', self.dialogs)
         self.assertEqual(['img_1.png', 'img_3.png'], self.names(window))
         self.assertEqual('img_3.png', self.current_name(window))
         self.assertEqual(1, window.cur_img_idx)
@@ -479,6 +481,19 @@ class MainWindowTestCase(unittest.TestCase):
         window.load_file(os.path.join(self.dir_path, 'img_1.png'))
         self.assertEqual(classes.split(), window.label_hist)
         return window
+
+    def test_each_class_gets_its_own_opaque_color(self):
+        window = self.given_yolo_window(
+            'cat\ndog\ncar\n',
+            '0 0.5 0.5 0.4 0.4\n1 0.2 0.2 0.2 0.2\n2 0.8 0.8 0.2 0.2\n')
+
+        colors = [shape.line_color.name() for shape in window.canvas.shapes]
+
+        self.assertEqual(len(colors), len(set(colors)))
+        self.assertTrue(all(shape.line_color.alpha() == 255
+                            for shape in window.canvas.shapes))
+        self.assertTrue(all(window.label_list.item(index).background().color().alpha() == 70
+                            for index in range(window.label_list.count())))
 
     def test_renaming_a_label_overwrites_its_class_in_place(self):
         window = self.given_yolo_window('cat\ndog\n', '0 0.5 0.5 0.4 0.4\n')

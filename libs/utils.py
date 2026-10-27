@@ -79,13 +79,44 @@ def format_shortcut(text):
     return '<b>%s</b>+<b>%s</b>' % (mod, key)
 
 
-def generate_color_by_text(text):
-    s = ustr(text)
-    hash_code = int(hashlib.sha256(s.encode('utf-8')).hexdigest(), 16)
-    r = int((hash_code / 255) % 255)
-    g = int((hash_code / 65025) % 255)
-    b = int((hash_code / 16581375) % 255)
-    return QColor(r, g, b, 100)
+# A qualitative palette of saturated colors. The entries come from the
+# ColorBrewer and Tableau palettes, which are widely used because their colors
+# are easy to tell apart and stay readable on light as well as on dark images.
+# Every color has a luminance below 0.30, so no box washes out on a white photo.
+LABEL_COLORS = [
+    (0x4E, 0x79, 0xA7),  # blue
+    (0xD9, 0x5F, 0x02),  # dark orange
+    (0x59, 0xA1, 0x4F),  # green
+    (0xE7, 0x29, 0x8A),  # magenta
+    (0xB8, 0x86, 0x0B),  # dark goldenrod
+    (0x1B, 0x9E, 0x77),  # dark teal
+    (0xE1, 0x57, 0x59),  # red
+    (0x75, 0x70, 0xB3),  # lavender blue
+    (0x5A, 0x91, 0x19),  # olive green
+    (0x0E, 0x9A, 0xA8),  # cyan
+    (0xC2, 0x4E, 0x9A),  # pink
+    (0x9C, 0x75, 0x5F),  # brown
+    (0x3F, 0x6F, 0xA8),  # navy
+    (0xD9, 0x7A, 0x1A),  # orange
+    (0x4E, 0x9E, 0x99),  # teal
+    (0xC0, 0x39, 0x2B),  # dark red
+    (0xB0, 0x7A, 0xA1),  # purple
+    (0x66, 0x66, 0x66),  # gray
+]
+
+
+def generate_color_by_text(text, alpha=255, index=None):
+    """Return the color of a label.
+
+    The optional index is the position of the class in the class list. It gives
+    each class of a dataset a different color. Without it the name of the label
+    selects the color, so a label always keeps the same one.
+    """
+    if index is None:
+        digest = hashlib.sha256(ustr(text).encode('utf-8')).hexdigest()
+        index = int(digest, 16)
+    red, green, blue = LABEL_COLORS[index % len(LABEL_COLORS)]
+    return QColor(red, green, blue, alpha)
 
 
 def have_qstring():
