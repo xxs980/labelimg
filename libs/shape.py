@@ -36,7 +36,10 @@ class Shape(object):
     point_type = P_ROUND
     point_size = 8
     scale = 1.0
-    label_font_size = 8
+    # Screen size of an annotation label. Shape.paint divides it by the zoom
+    # scale, so the text stays small and readable at every zoom level instead
+    # of growing with the resolution of the image.
+    label_font_size = 23
 
     def __init__(self, label=None, line_color=None, difficult=False, paint_label=False):
         self.label = label
@@ -115,22 +118,25 @@ class Shape(object):
             if self.paint_label:
                 min_x = sys.maxsize
                 min_y = sys.maxsize
-                min_y_label = int(1.25 * self.label_font_size)
                 for point in self.points:
                     min_x = min(min_x, point.x())
                     min_y = min(min_y, point.y())
                 if min_x != sys.maxsize and min_y != sys.maxsize:
                     font = QFont()
-                    font.setPointSize(self.label_font_size)
+                    font.setPointSizeF(
+                        max(1.0, self.label_font_size / max(self.scale, 0.01)))
                     font.setBold(True)
                     painter.setFont(font)
                     if self.label is None:
                         self.label = ""
-                    if min_y < min_y_label:
-                        min_y += min_y_label
-                    # print(int(min_x), int(min_y), self.label)
-                    painter.drawText(int(min_x), int(min_y), self.label)
-                    # painter.drawText(int(min_x), int(min_y * 1.75 + 30) , self.label)
+                    font_metrics = QFontMetricsF(font)
+                    label_gap = 2.0 / max(self.scale, 0.01)
+                    label_baseline = min_y - label_gap - font_metrics.descent()
+                    if label_baseline - font_metrics.ascent() < 0:
+                        # There is no room above the box, so keep the label
+                        # just inside its top edge instead.
+                        label_baseline = min_y + label_gap + font_metrics.ascent()
+                    painter.drawText(int(min_x), int(label_baseline), self.label)
 
             if self.fill:
                 color = self.select_fill_color if self.selected else self.fill_color
