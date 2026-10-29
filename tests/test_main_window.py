@@ -105,6 +105,13 @@ class MainWindowTestCase(unittest.TestCase):
 
         self.assertEqual(1, window.img_count)
 
+    def test_no_class_is_loaded_without_a_class_file(self):
+        self.make_images(1)
+
+        window = mlabelImg.MainWindow(self.dir_path, None, self.dir_path)
+
+        self.assertEqual([], window.label_hist)
+
     def test_the_suggested_labels_come_from_the_save_directory(self):
         save_dir = os.path.join(self.base_dir, 'annotations')
         os.makedirs(save_dir)
