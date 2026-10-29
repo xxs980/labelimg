@@ -98,6 +98,22 @@ class MainWindowTestCase(unittest.TestCase):
         self.assertEqual(3, window.img_count)
         self.assertEqual('img_1.png', self.current_name(window))
 
+    def test_opening_another_directory_clears_the_previous_classes(self):
+        first = os.path.join(self.base_dir, 'first')
+        second = os.path.join(self.base_dir, 'second')
+        os.makedirs(first)
+        os.makedirs(second)
+        save_image(first, 'first.png')
+        save_image(second, 'second.png')
+        self.given_file(first, 'classes.txt', 'cat\ndog\n')
+        window = mlabelImg.MainWindow(first, None, None)
+        self.app.processEvents()
+        self.assertEqual(['cat', 'dog'], window.label_hist)
+
+        window.open_dir_dialog(dir_path=second, silent=True)
+
+        self.assertEqual([], window.label_hist)
+
     def test_opening_a_directory_without_a_class_file_works(self):
         self.make_images(1)
 
@@ -174,7 +190,7 @@ class MainWindowTestCase(unittest.TestCase):
 
         self.assertEqual(['dog'], window.label_hist)
 
-    def test_the_predefined_classes_are_used_without_a_class_file(self):
+    def test_a_save_directory_without_classes_clears_the_predefined_classes(self):
         save_dir = os.path.join(self.base_dir, 'annotations')
         os.makedirs(save_dir)
         predef = self.given_file(self.base_dir, 'predefined.txt', 'person\ncar\n')
@@ -182,7 +198,7 @@ class MainWindowTestCase(unittest.TestCase):
 
         window = mlabelImg.MainWindow(self.dir_path, predef, save_dir)
 
-        self.assertEqual(['person', 'car'], window.label_hist)
+        self.assertEqual([], window.label_hist)
 
     def test_changing_the_save_directory_updates_the_suggested_labels(self):
         first = os.path.join(self.base_dir, 'first')
@@ -199,6 +215,21 @@ class MainWindowTestCase(unittest.TestCase):
         window.load_save_dir_classes()
 
         self.assertEqual(['dog', 'cow'], window.label_hist)
+
+    def test_changing_to_a_save_directory_without_classes_clears_the_labels(self):
+        first = os.path.join(self.base_dir, 'first')
+        second = os.path.join(self.base_dir, 'second')
+        os.makedirs(first)
+        os.makedirs(second)
+        self.given_file(first, 'classes.txt', 'cat\ndog\n')
+        self.make_images(1)
+        window = mlabelImg.MainWindow(self.dir_path, None, first)
+        self.assertEqual(['cat', 'dog'], window.label_hist)
+
+        window.default_save_dir = second
+        window.load_save_dir_classes()
+
+        self.assertEqual([], window.label_hist)
 
     def test_deleting_an_image_shows_the_next_one(self):
         self.make_images(3)

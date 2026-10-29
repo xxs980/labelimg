@@ -478,7 +478,7 @@ class MainWindow(QMainWindow, WindowMixin):
                                          (__appname__, self.default_save_dir))
             self.statusBar().show()
 
-        # The labels offered when drawing a box come from the annotations.
+        # The labels offered when drawing a box come from the save directory.
         self.load_save_dir_classes()
 
         self.restoreState(settings.get(SETTING_WIN_STATE, QByteArray()))
@@ -1375,6 +1375,10 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.may_continue() or not dir_path:
             return
 
+        # A directory is a new annotation context. Never carry the class
+        # suggestions of the previous directory into it.
+        self.set_label_hist([])
+        self.load_predefined_classes(self.predef_class_file)
         self.last_open_dir = dir_path
         self.dir_name = dir_path
         self.file_path = None
@@ -1718,6 +1722,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         class_file = os.path.join(class_dir, CLASS_LIST_FILENAME)
         if not os.path.isfile(class_file):
+            # The selected save directory defines the dataset. Without its
+            # classes.txt there are no classes to suggest.
+            self.set_label_hist([])
             return
 
         self.save_dir_class_list_path = class_file
