@@ -112,6 +112,16 @@ class MainWindowTestCase(unittest.TestCase):
 
         self.assertEqual([], window.label_hist)
 
+    def test_previous_annotations_do_not_fill_an_empty_class_list(self):
+        self.make_images(1)
+        window = mlabelImg.MainWindow(self.dir_path, None, self.dir_path)
+        self.given_file(self.dir_path, 'img_1.xml', self.voc_xml(['person']))
+
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+
+        self.assertEqual(['person'], [shape.label for shape in window.canvas.shapes])
+        self.assertEqual([], window.label_hist)
+
     def test_the_suggested_labels_come_from_the_save_directory(self):
         save_dir = os.path.join(self.base_dir, 'annotations')
         os.makedirs(save_dir)
@@ -122,6 +132,47 @@ class MainWindowTestCase(unittest.TestCase):
 
         # The classes of the dataset take the place of the predefined ones.
         self.assertEqual(['cow', 'sheep'], window.label_hist)
+
+    def test_annotation_labels_do_not_change_the_save_directory_classes(self):
+        save_dir = os.path.join(self.base_dir, 'annotations')
+        os.makedirs(save_dir)
+        self.given_file(save_dir, 'classes.txt', 'cat\ndog\n')
+        self.make_images(1)
+        window = mlabelImg.MainWindow(self.dir_path, None, save_dir)
+        self.given_file(self.dir_path, 'img_1.xml', self.voc_xml(['cow']))
+
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+
+        self.assertEqual(['cow'], [shape.label for shape in window.canvas.shapes])
+        self.assertEqual(['cat', 'dog'], window.label_hist)
+
+    def test_yolo_prefers_the_save_directory_classes(self):
+        save_dir = os.path.join(self.base_dir, 'annotations')
+        os.makedirs(save_dir)
+        self.given_file(save_dir, 'classes.txt', 'cat\ndog\n')
+        self.make_images(1)
+        window = mlabelImg.MainWindow(self.dir_path, None, save_dir)
+        self.given_file(self.dir_path, 'classes.txt', 'old\nolder\n')
+        self.given_file(self.dir_path, 'img_1.txt', '1 0.5 0.5 0.4 0.4\n')
+
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+
+        self.assertEqual(['dog'], [shape.label for shape in window.canvas.shapes])
+        self.assertEqual(['cat', 'dog'], window.label_hist)
+
+    def test_the_save_directory_classes_are_reloaded_for_each_image(self):
+        save_dir = os.path.join(self.base_dir, 'annotations')
+        os.makedirs(save_dir)
+        self.given_file(save_dir, 'classes.txt', 'cat\n')
+        self.make_images(2)
+        window = mlabelImg.MainWindow(self.dir_path, None, save_dir)
+        window.load_file(os.path.join(self.dir_path, 'img_1.png'))
+        self.assertEqual(['cat'], window.label_hist)
+
+        self.given_file(save_dir, 'classes.txt', 'dog\n')
+        window.load_file(os.path.join(self.dir_path, 'img_2.png'))
+
+        self.assertEqual(['dog'], window.label_hist)
 
     def test_the_predefined_classes_are_used_without_a_class_file(self):
         save_dir = os.path.join(self.base_dir, 'annotations')
@@ -432,17 +483,17 @@ class MainWindowTestCase(unittest.TestCase):
 
         self.assertEqual(['dog'], [shape.label for shape in window.canvas.shapes])
 
-    def test_the_class_list_of_the_dataset_is_offered_as_a_label(self):
+    def test_an_unknown_class_index_does_not_change_the_class_list(self):
         window = self.given_window_with_one_image()
         self.given_file(self.dir_path, 'img_1.txt', '3 0.5 0.5 0.4 0.4\n')
         self.given_file(self.dir_path, 'classes.txt', 'cat\ndog\ncow\n')
 
         window.load_file(os.path.join(self.dir_path, 'img_1.png'))
 
-        # An unknown index does not drop the box, and the name of the class
-        # stays the same the next time the annotation is saved.
+        # An unknown index does not drop the box, but it must not grow the
+        # class list that classes.txt defines.
         self.assertEqual(['class3'], [shape.label for shape in window.canvas.shapes])
-        self.assertIn('class3', window.label_hist)
+        self.assertEqual(['cat', 'dog', 'cow'], window.label_hist)
 
     def test_the_boxes_of_an_xml_next_to_the_image_are_shown(self):
         save_dir = os.path.join(self.base_dir, 'annotations')

@@ -116,6 +116,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Load predefined classes to the list
         self.predef_class_file = default_prefdef_class_file
+        self.save_dir_class_list_path = None
         self.load_predefined_classes(self.predef_class_file)
 
         # Main widgets and related state.
@@ -837,9 +838,6 @@ class MainWindow(QMainWindow, WindowMixin):
         s = []
         for label, points, line_color, fill_color, difficult in shapes:
             label = ustr(label)
-            if label not in self.label_hist:
-                # The annotation already uses this class, offer it as well.
-                self.label_hist.append(label)
             shape = Shape(label=label)
             for x, y in points:
 
@@ -1164,6 +1162,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self.status("Loaded %s" % os.path.basename(unicode_file_path))
             self.image = image
             self.file_path = unicode_file_path
+            # classes.txt of the annotation destination is the class list of
+            # the dataset. Reload it for every image so labels of other
+            # annotation files never leak into the suggestions.
+            self.load_save_dir_classes()
             self.canvas.load_pixmap(QPixmap.fromImage(image))
             if self.label_file:
                 self.load_labels(self.label_file.shapes)
@@ -1704,14 +1706,22 @@ class MainWindow(QMainWindow, WindowMixin):
             self.label_hist.append(label)
 
     def load_save_dir_classes(self):
-        """Suggest the labels that classes.txt of the save directory holds."""
-        if not self.default_save_dir:
+        """Use classes.txt of the save directory as the class list."""
+        self.save_dir_class_list_path = None
+        if self.default_save_dir:
+            class_dir = ustr(self.default_save_dir)
+        elif self.file_path:
+            file_path = ustr(self.file_path)
+            class_dir = file_path if os.path.isdir(file_path) else os.path.dirname(file_path)
+        else:
             return
 
-        class_file = os.path.join(ustr(self.default_save_dir), CLASS_LIST_FILENAME)
-        classes = read_class_list(class_file)
-        if classes:
-            self.set_label_hist(classes)
+        class_file = os.path.join(class_dir, CLASS_LIST_FILENAME)
+        if not os.path.isfile(class_file):
+            return
+
+        self.save_dir_class_list_path = class_file
+        self.set_label_hist(read_class_list(class_file))
 
     def set_label_hist(self, classes):
         """Replace the known classes, their order is their yolo index."""
@@ -1754,15 +1764,10 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.predef_class_file:
             extra_class_dirs.append(os.path.dirname(ustr(self.predef_class_file)))
         t_yolo_parse_reader = YoloReader(txt_path, self.image,
+                                         class_list_path=self.save_dir_class_list_path,
                                          img_path=ustr(self.file_path),
                                          extra_class_dirs=extra_class_dirs)
         shapes = t_yolo_parse_reader.get_shapes()
-
-        # The window has to know the names of the classes, otherwise saving the
-        # annotation would rename them or shift their indexes.
-        for class_name in t_yolo_parse_reader.get_class_list():
-            if class_name not in self.label_hist:
-                self.label_hist.append(class_name)
 
         self.show_annotation_warnings(t_yolo_parse_reader.warnings, shapes)
         self.load_labels(shapes)
